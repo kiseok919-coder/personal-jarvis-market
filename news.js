@@ -6,7 +6,7 @@
 const fs = require('fs'), os = require('os'), path = require('path'), { execFileSync } = require('child_process');
 
 // Google retires model names often; a 404 error message names the current one. Tried in order.
-const MODELS = ['gemini-3.8-flash', 'gemini-flash-latest'];
+const MODELS = ['gemini-flash-lite-latest', 'gemini-3.8-flash', 'gemini-flash-latest'];   // lite first: fast enough for a summary
 const VOICE = { ko: ['ko-KR-InJoonNeural', '-6Hz'], en: ['en-GB-RyanNeural', '-4Hz'] };
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -71,7 +71,7 @@ async function gemini(key, text) {
         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ parts: [{ text }] }], generationConfig: { temperature: 0.3, responseMimeType: 'application/json' } }),
-          signal: AbortSignal.timeout(90000)
+          signal: AbortSignal.timeout(120000)
         });
         const j = await r.json();
         log(`${model}: ${r.status}`);
