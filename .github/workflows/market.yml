@@ -27,4 +27,4 @@ jobs:
         env:
           BOT_KEY: ${{ secrets.BOT_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
-          FORCE_NEWS: ${{ inputs.news && '1' || '' }}
+          FORCE_NEWS: ${{ github.event.inputs.news == 'true' && '1' || '' }}
