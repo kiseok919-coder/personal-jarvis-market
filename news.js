@@ -29,21 +29,23 @@ Return ONLY this JSON, nothing else:
  "en":{"title":"","summary":"","sections":[{"h":"Markets today","body":""},{"h":"Watchlist news","body":""},{"h":"Coming up","body":""}],"speech":""}}`;
 }
 
+const NO_SEARCH = '\n\nSearch is unavailable: describe ONLY the prices above, and say in the first section that news search was unavailable this time.';
 async function gemini(key, text) {
   const errs = [];
-  for (const model of MODELS) {
+  // First with Google Search (real news). If the free quota refuses search, fall back to prices only.
+  for (const [model, search] of [...MODELS.map(m => [m, true]), ...MODELS.slice(0, 2).map(m => [m, false])]) {
     try {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 0.3 } })
+        body: JSON.stringify({ contents: [{ parts: [{ text: search ? text : text + NO_SEARCH }] }], ...(search ? { tools: [{ google_search: {} }] } : {}), generationConfig: { temperature: 0.3 } })
       });
       const j = await r.json();
-      if (!r.ok) { errs.push(`${model}: ${r.status} ${j.error?.message || ''}`.slice(0, 160)); continue; }
+      if (!r.ok) { errs.push(`${model}${search ? '+search' : ''}: ${r.status} ${(j.error?.message || '').replace(/\s+/g, ' ')}`.slice(0, 400)); continue; }
       const c = j.candidates?.[0], out = (c?.content?.parts || []).map(p => p.text || '').join('');
       const s = out.indexOf('{'), e = out.lastIndexOf('}');
       const brief = JSON.parse(out.slice(s, e + 1));
       const src = (c.groundingMetadata?.groundingChunks || []).map(g => g.web).filter(Boolean).slice(0, 6).map(w => ({ t: w.title, u: w.uri }));
-      return { brief, src, model };
+      return { brief, src, model: model + (search ? '+search' : '') };
     } catch (e) { errs.push(`${model}: ${e.message}`.slice(0, 160)); }
   }
   throw new Error(errs.join(' | ') || 'gemini failed');
