@@ -19,7 +19,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       # No third-party actions: the runner already has git and Node, so nothing outside this repo ever sees BOT_KEY.
       - run: git clone --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" app

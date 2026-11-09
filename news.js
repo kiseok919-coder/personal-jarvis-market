@@ -10,6 +10,7 @@ const MODELS = ['gemini-3.8-flash', 'gemini-flash-latest'];
 const VOICE = { ko: ['ko-KR-InJoonNeural', '-6Hz'], en: ['en-GB-RyanNeural', '-4Hz'] };
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const log = m => console.log(`[news ${new Date().toISOString().slice(11, 19)}] ${m}`);
 
 // ── Headlines: a few fixed market topics + up to 6 watchlist names, newest first, last 24 hours ──
 const TOPICS = [['코스피 증시', 'ko'], ['미국 증시 뉴욕증시', 'ko'], ['반도체 엔비디아 삼성전자', 'ko'], ['환율 금리 연준', 'ko'], ['stock market today', 'en']];
@@ -17,7 +18,7 @@ const unxml = s => s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').re
 async function rss(q, lang) {
   const loc = lang === 'ko' ? 'hl=ko&gl=KR&ceid=KR:ko' : 'hl=en-US&gl=US&ceid=US:en';
   try {
-    const x = await (await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(q + ' when:1d')}&${loc}`, { headers: { 'User-Agent': UA } })).text();
+    const x = await (await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(q + ' when:1d')}&${loc}`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15000) })).text();
     return [...x.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 5).map(m => ({
       t: unxml((m[1].match(/<title>([\s\S]*?)<\/title>/) || [])[1] || ''),
       u: unxml((m[1].match(/<link>([\s\S]*?)<\/link>/) || [])[1] || ''),
@@ -64,20 +65,22 @@ Return ONLY this JSON, nothing else:
 
 async function gemini(key, text) {
   const errs = [];
-  for (let round = 0; round < 3; round++) {          // 503 "high demand" is usually gone within a minute
+  for (let round = 0; round < 2; round++) {          // 503 "high demand" is usually gone within a minute
     for (const model of MODELS) {
       try {
         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: [{ text }] }], generationConfig: { temperature: 0.3, responseMimeType: 'application/json' } })
+          body: JSON.stringify({ contents: [{ parts: [{ text }] }], generationConfig: { temperature: 0.3, responseMimeType: 'application/json' } }),
+          signal: AbortSignal.timeout(90000)
         });
         const j = await r.json();
+        log(`${model}: ${r.status}`);
         if (!r.ok) { errs.push(`${model}: ${r.status} ${(j.error?.message || '').replace(/\s+/g, ' ')}`.slice(0, 300)); continue; }
         const out = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
         return { brief: JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)), model };
       } catch (e) { errs.push(`${model}: ${e.message}`.slice(0, 200)); }
     }
-    await sleep(30000);
+    if (round === 0) await sleep(20000);
   }
   throw new Error([...new Set(errs)].join(' | ') || 'gemini failed');
 }
@@ -87,8 +90,8 @@ let EDGE = null;
 function edgeTts() {
   if (EDGE) return EDGE;
   const v = path.join(os.tmpdir(), 'ttsenv');
-  execFileSync('python3', ['-m', 'venv', v], { stdio: 'ignore' });
-  execFileSync(path.join(v, 'bin', 'pip'), ['install', '-q', 'edge-tts>=7,<8'], { stdio: 'ignore' });
+  execFileSync('python3', ['-m', 'venv', v], { stdio: 'ignore', timeout: 60000 });
+  execFileSync(path.join(v, 'bin', 'pip'), ['install', '-q', 'edge-tts>=7,<8'], { stdio: 'ignore', timeout: 120000 });
   return (EDGE = path.join(v, 'bin', 'edge-tts'));
 }
 
@@ -97,7 +100,7 @@ function tts(text, lang) {
   const tf = path.join(dir, 't.txt'), out = path.join(dir, 'o.mp3');
   fs.writeFileSync(tf, text, 'utf8');
   for (const extra of [[`--pitch=${pitch}`], []]) {   // the voice server sometimes rejects a pitch setting
-    try { execFileSync(edgeTts(), ['--voice', voice, ...extra, '-f', tf, '--write-media', out], { stdio: 'ignore' }); return fs.readFileSync(out).toString('base64'); } catch {}
+    try { execFileSync(edgeTts(), ['--voice', voice, ...extra, '-f', tf, '--write-media', out], { stdio: 'ignore', timeout: 90000 }); return fs.readFileSync(out).toString('base64'); } catch {}
   }
   return null;
 }
@@ -105,10 +108,13 @@ function tts(text, lang) {
 async function makeNews(key, market, fng) {
   const now = new Date();
   const heads = await headlines(market);
+  log(`headlines ${heads.length}`);
   const { brief, model } = await gemini(key, prompt(market, fng, heads, now));
   const used = (Array.isArray(brief.used) ? brief.used : []).map(n => heads[n - 1]).filter(Boolean);
   const src = (used.length ? used : heads).slice(0, 6).map(h => ({ t: h.t, u: h.u }));
+  log(`text ok (${model})`);
   const audio = { ko: tts(brief.ko.speech, 'ko'), en: tts(brief.en.speech, 'en') };
+  log(`voice ko ${!!audio.ko} en ${!!audio.en}`);
   return { news: { at: now.toISOString(), model, heads: heads.length, ko: brief.ko, en: brief.en, src, voice: { ko: !!audio.ko, en: !!audio.en } }, audio };
 }
 
