@@ -6,18 +6,25 @@ on:
     - cron: '3-59/10 13-21 * * 1-5'  # US market 22:00-06:59 KST (covers summer and winter time)
     - cron: '17,47 * * * *'          # everything else: crypto and Fear & Greed every 30 minutes
   workflow_dispatch:
+    inputs:
+      news:
+        description: Make a news briefing now
+        type: boolean
+        default: false
 concurrency:
   group: market
-  cancel-in-progress: true
+  cancel-in-progress: false   # never cut off a news briefing in the middle
 permissions:
   contents: read
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       # No third-party actions: the runner already has git and Node, so nothing outside this repo ever sees BOT_KEY.
       - run: git clone --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" app
       - run: node app/market.js
         env:
           BOT_KEY: ${{ secrets.BOT_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          FORCE_NEWS: ${{ inputs.news && '1' || '' }}

@@ -1,8 +1,10 @@
 // Personal Jarvis — market robot
 // Runs on GitHub Actions. Fetches prices + RSI(14) + Fear & Greed and writes them to ONE Firestore document.
-// It knows only the symbol list. No holdings, quantities, account data or briefings ever pass through here.
+// It knows only the symbol list. No holdings, quantities, account data or plan ever pass through here.
 // The document path is secret (BOT_KEY, stored in GitHub Secrets); Firestore rules allow only that one document.
+// News briefing (news.js) is made at 07:00 and 23:00 KST, or when the app leaves a request ("req").
 
+const { makeNews } = require('./news.js');
 const KEY = process.env.BOT_KEY;
 if (!KEY) throw new Error('BOT_KEY secret is missing');
 const DOC = `https://firestore.googleapis.com/v1/projects/sales-board-4904c/databases/(default)/documents/econ_bot/${KEY}`;
@@ -54,20 +56,48 @@ async function fng() {
   return out;
 }
 
+const patch = (url, fields) => fetch(`${url}?${Object.keys(fields).map(f => 'updateMask.fieldPaths=' + f).join('&')}`, {
+  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, { stringValue: v }])) })
+}).then(async w => { if (!w.ok) throw new Error('write failed: ' + w.status + ' ' + (await w.text()).slice(0, 200)); });
+
+// Latest 07:00 or 23:00 KST slot at or before now (UTC 22:00 / 14:00)
+function lastSlot(now) {
+  const slots = [];
+  for (let d = -1; d <= 0; d++) for (const h of [14, 22]) {
+    const t = new Date(now); t.setUTCDate(t.getUTCDate() + d); t.setUTCHours(h, 0, 0, 0); slots.push(t);
+  }
+  return slots.filter(t => t <= now).sort((a, b) => b - a)[0];
+}
+
 (async () => {
   const r = await fetch(DOC);
   if (!r.ok) throw new Error('symbol list read failed: ' + r.status);
-  const syms = JSON.parse((await r.json()).fields.syms.stringValue);   // [{ s, n }]
+  const f = (await r.json()).fields;
+  const syms = JSON.parse(f.syms.stringValue);   // [{ s, n }]
   const market = [];
   for (let i = 0; i < syms.length; i += 6) {
     const got = await Promise.all(syms.slice(i, i + 6).map(x => quote(x.s, x.n)));
     market.push(...got.filter(Boolean));
   }
   const live = { at: new Date().toISOString(), market, fng: await fng() };
-  const w = await fetch(`${DOC}?updateMask.fieldPaths=live`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields: { live: { stringValue: JSON.stringify(live) } } })
-  });
-  if (!w.ok) throw new Error('write failed: ' + w.status + ' ' + (await w.text()).slice(0, 200));
+  await patch(DOC, { live: JSON.stringify(live) });
   console.log(`ok: ${market.length}/${syms.length} quotes, F&G stock ${live.fng.stock?.score ?? '-'} crypto ${live.fng.crypto?.score ?? '-'}`);
+
+  // News briefing: on request from the app, or once per 07:00 / 23:00 slot
+  const newsAt = [f.news, f.newsErr].filter(Boolean).map(x => JSON.parse(x.stringValue).at || '').sort().pop() || '';
+  const req = f.req?.stringValue || '';
+  const due = (req && req > newsAt) || newsAt < lastSlot(new Date()).toISOString() || process.env.FORCE_NEWS === '1';
+  if (!due) return;
+  if (!process.env.GEMINI_KEY) { console.log('news skipped: GEMINI_KEY secret is missing'); return; }
+  try {
+    const { news, audio } = await makeNews(process.env.GEMINI_KEY, market, live.fng);
+    for (const l of ['ko', 'en']) if (audio[l]) await patch(`${DOC}/news/${l}`, { b64: audio[l] });
+    await patch(DOC, { news: JSON.stringify(news), newsErr: '{}' });
+    console.log(`news ok: ${news.model}, voice ko ${news.voice.ko} en ${news.voice.en}`);
+  } catch (e) {
+    // Record the failure so the app can say so, and so a request does not retry every 10 minutes
+    await patch(DOC, { newsErr: JSON.stringify({ at: new Date().toISOString(), error: e.message.slice(0, 200) }) });
+    console.log('news failed: ' + e.message);
+  }
 })().catch(e => { console.error(e.message); process.exit(1); });
