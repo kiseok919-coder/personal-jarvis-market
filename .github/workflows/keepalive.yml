@@ -3,7 +3,7 @@ name: keepalive
 # This writes a one-line timestamp once a month so the market schedule keeps running.
 on:
   schedule:
-    - cron: '0 3 1 * *'
+    - cron: '23 3 1 * *'
   workflow_dispatch:
 permissions:
   contents: write
@@ -11,10 +11,14 @@ jobs:
   touch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # No third-party actions: plain git with the short-lived job token.
       - run: |
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" app
+          cd app
           date -u +%Y-%m-%dT%H:%MZ > .keepalive
           git config user.name "jarvis-keepalive"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .keepalive
-          git commit -m "keepalive" && git push || true
+          git commit -m "keepalive" && git push
+        env:
+          GH_TOKEN: ${{ github.token }}
