@@ -49,6 +49,7 @@ ${news}
 
 Rules:
 - Use only facts found in the prices or headlines above. Never invent numbers, dates or events. If something is unclear, say "확인 못 함".
+- A market may still be trading now. Say a market "closed" (마감) only if a headline says it closed; otherwise say it is trading or opened (장중 / 출발).
 - Pick the 3-5 most important stories. Mention watchlist instruments only when a headline is about them.
 - "Coming up" lists scheduled events only if a headline mentions them.
 - No buy/sell/hold advice and no personal recommendations.
