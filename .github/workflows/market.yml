@@ -1,0 +1,24 @@
+name: market
+on:
+  schedule:
+    - cron: '*/10 0-6 * * 1-5'    # Korea market 09:00-15:59 KST, weekdays
+    - cron: '*/10 13-21 * * 1-5'  # US market 22:00-06:59 KST (covers summer and winter time)
+    - cron: '5,35 * * * *'        # everything else: crypto and Fear & Greed every 30 minutes
+  workflow_dispatch:
+concurrency:
+  group: market
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node market.js
+        env:
+          BOT_KEY: ${{ secrets.BOT_KEY }}
