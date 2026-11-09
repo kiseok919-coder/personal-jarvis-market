@@ -1,54 +1,85 @@
-// AI news briefing: Gemini (with Google Search) writes a short Korean + English market briefing,
-// edge-tts turns it into Jarvis voices. Input is public market data only (symbols, prices, RSI, Fear & Greed).
-// It never sees holdings, quantities or any personal plan, and it gives no buy/sell advice.
+// AI news briefing: the robot collects today's public headlines (Google News RSS), Gemini summarises them
+// with the verified prices into a short Korean + English briefing, and edge-tts turns it into Jarvis voices.
+// Input is public data only (symbols, prices, RSI, Fear & Greed, headlines). It never sees holdings,
+// quantities or any personal plan, and it gives no buy/sell advice.
+// Gemini's built-in Google Search is not included in the free quota, so headlines are fetched here instead.
 const fs = require('fs'), os = require('os'), path = require('path'), { execFileSync } = require('child_process');
 
-// Google retires model names often; the error message names the current one. Tried in order.
-const MODELS = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
+// Google retires model names often; a 404 error message names the current one. Tried in order.
+const MODELS = ['gemini-3.8-flash', 'gemini-flash-latest'];
 const VOICE = { ko: ['ko-KR-InJoonNeural', '-6Hz'], en: ['en-GB-RyanNeural', '-4Hz'] };
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function prompt(market, fng, now) {
+// ── Headlines: a few fixed market topics + up to 6 watchlist names, newest first, last 24 hours ──
+const TOPICS = [['코스피 증시', 'ko'], ['미국 증시 뉴욕증시', 'ko'], ['반도체 엔비디아 삼성전자', 'ko'], ['환율 금리 연준', 'ko'], ['stock market today', 'en']];
+const unxml = s => s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+async function rss(q, lang) {
+  const loc = lang === 'ko' ? 'hl=ko&gl=KR&ceid=KR:ko' : 'hl=en-US&gl=US&ceid=US:en';
+  try {
+    const x = await (await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(q + ' when:1d')}&${loc}`, { headers: { 'User-Agent': UA } })).text();
+    return [...x.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 5).map(m => ({
+      t: unxml((m[1].match(/<title>([\s\S]*?)<\/title>/) || [])[1] || ''),
+      u: unxml((m[1].match(/<link>([\s\S]*?)<\/link>/) || [])[1] || ''),
+      d: (m[1].match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || ''
+    })).filter(h => h.t);
+  } catch { return []; }
+}
+async function headlines(market) {
+  const watch = market.filter(m => !m.sym.startsWith('^') && m.sym !== 'KRW=X').slice(0, 6).map(m => [m.name.replace(/\(.*\)/, '').trim() + ' 주가', 'ko']);
+  const all = (await Promise.all([...TOPICS, ...watch].map(([q, l]) => rss(q, l)))).flat();
+  const seen = new Set();
+  return all.filter(h => !seen.has(h.t) && seen.add(h.t)).slice(0, 40);
+}
+
+function prompt(market, fng, heads, now) {
   const kst = new Date(now.getTime() + 9 * 3600e3).toISOString().replace('T', ' ').slice(0, 16);
   const rows = market.map(m => `${m.name} (${m.sym}): ${m.price} ${m.cur || ''}, ${m.chg >= 0 ? '+' : ''}${m.chg.toFixed(2)}%, RSI ${m.rsi ?? '-'}, ${m.day}`).join('\n');
+  const news = heads.map((h, i) => `[${i + 1}] ${h.t} (${h.d})`).join('\n') || '(no headlines could be fetched)';
   return `You are "Jarvis", a calm market news assistant. Current time: ${kst} KST.
-Use Google Search to find TODAY's most important market news (Korea and US stocks, semiconductors/AI, rates, FX, crypto) and news about the instruments below.
+Write today's market briefing from ONLY the verified prices and the headlines below.
 
-Latest prices (already verified):
+Latest prices (verified):
 ${rows}
 Fear & Greed: stocks ${fng.stock?.score ?? 'n/a'} (${fng.stock?.label ?? ''}), crypto ${fng.crypto?.score ?? 'n/a'}.
 
+Today's headlines (last 24 hours, numbered):
+${news}
+
 Rules:
-- Facts only, from search results or the prices above. If you could not confirm a number, say so ("확인 못 함"). Never invent numbers.
-- No buy/sell/hold advice and no personal recommendations. Describe what happened and what is scheduled next.
+- Use only facts found in the prices or headlines above. Never invent numbers, dates or events. If something is unclear, say "확인 못 함".
+- Pick the 3-5 most important stories. Mention watchlist instruments only when a headline is about them.
+- "Coming up" lists scheduled events only if a headline mentions them.
+- No buy/sell/hold advice and no personal recommendations.
 - Korean must be easy enough for a middle-school student. Short sentences.
 - "speech" is read aloud: about 50-60 seconds, no symbols, no bullet marks, numbers written so they read naturally.
 - English speech is in a polite British butler tone and addresses the listener as "sir".
+- "used" is the list of headline numbers you relied on.
 
 Return ONLY this JSON, nothing else:
 {"ko":{"title":"","summary":"2-3 sentences","sections":[{"h":"오늘 시장","body":""},{"h":"관심 종목 소식","body":""},{"h":"다음 일정","body":""}],"speech":""},
- "en":{"title":"","summary":"","sections":[{"h":"Markets today","body":""},{"h":"Watchlist news","body":""},{"h":"Coming up","body":""}],"speech":""}}`;
+ "en":{"title":"","summary":"","sections":[{"h":"Markets today","body":""},{"h":"Watchlist news","body":""},{"h":"Coming up","body":""}],"speech":""},
+ "used":[1,2]}`;
 }
 
-const NO_SEARCH = '\n\nSearch is unavailable: describe ONLY the prices above, and say in the first section that news search was unavailable this time.';
 async function gemini(key, text) {
   const errs = [];
-  // First with Google Search (real news). If the free quota refuses search, fall back to prices only.
-  for (const [model, search] of [...MODELS.map(m => [m, true]), ...MODELS.slice(0, 2).map(m => [m, false])]) {
-    try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: search ? text : text + NO_SEARCH }] }], ...(search ? { tools: [{ google_search: {} }] } : {}), generationConfig: { temperature: 0.3 } })
-      });
-      const j = await r.json();
-      if (!r.ok) { errs.push(`${model}${search ? '+search' : ''}: ${r.status} ${(j.error?.message || '').replace(/\s+/g, ' ')}`.slice(0, 400)); continue; }
-      const c = j.candidates?.[0], out = (c?.content?.parts || []).map(p => p.text || '').join('');
-      const s = out.indexOf('{'), e = out.lastIndexOf('}');
-      const brief = JSON.parse(out.slice(s, e + 1));
-      const src = (c.groundingMetadata?.groundingChunks || []).map(g => g.web).filter(Boolean).slice(0, 6).map(w => ({ t: w.title, u: w.uri }));
-      return { brief, src, model: model + (search ? '+search' : '') };
-    } catch (e) { errs.push(`${model}: ${e.message}`.slice(0, 160)); }
+  for (let round = 0; round < 3; round++) {          // 503 "high demand" is usually gone within a minute
+    for (const model of MODELS) {
+      try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text }] }], generationConfig: { temperature: 0.3, responseMimeType: 'application/json' } })
+        });
+        const j = await r.json();
+        if (!r.ok) { errs.push(`${model}: ${r.status} ${(j.error?.message || '').replace(/\s+/g, ' ')}`.slice(0, 300)); continue; }
+        const out = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+        return { brief: JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)), model };
+      } catch (e) { errs.push(`${model}: ${e.message}`.slice(0, 200)); }
+    }
+    await sleep(30000);
   }
-  throw new Error(errs.join(' | ') || 'gemini failed');
+  throw new Error([...new Set(errs)].join(' | ') || 'gemini failed');
 }
 
 // Ubuntu blocks system-wide pip installs, so edge-tts goes into its own small virtual env
@@ -73,9 +104,12 @@ function tts(text, lang) {
 
 async function makeNews(key, market, fng) {
   const now = new Date();
-  const { brief, src, model } = await gemini(key, prompt(market, fng, now));
+  const heads = await headlines(market);
+  const { brief, model } = await gemini(key, prompt(market, fng, heads, now));
+  const used = (Array.isArray(brief.used) ? brief.used : []).map(n => heads[n - 1]).filter(Boolean);
+  const src = (used.length ? used : heads).slice(0, 6).map(h => ({ t: h.t, u: h.u }));
   const audio = { ko: tts(brief.ko.speech, 'ko'), en: tts(brief.en.speech, 'en') };
-  return { news: { at: now.toISOString(), model, ko: brief.ko, en: brief.en, src, voice: { ko: !!audio.ko, en: !!audio.en } }, audio };
+  return { news: { at: now.toISOString(), model, heads: heads.length, ko: brief.ko, en: brief.en, src, voice: { ko: !!audio.ko, en: !!audio.en } }, audio };
 }
 
-module.exports = { makeNews };
+module.exports = { makeNews, headlines };
