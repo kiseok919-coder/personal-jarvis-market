@@ -3,7 +3,8 @@
 // It never sees holdings, quantities or any personal plan, and it gives no buy/sell advice.
 const fs = require('fs'), os = require('os'), path = require('path'), { execFileSync } = require('child_process');
 
-const MODELS = ['gemini-flash-latest', 'gemini-2.5-flash'];
+// Google retires model names often; the error message names the current one. Tried in order.
+const MODELS = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
 const VOICE = { ko: ['ko-KR-InJoonNeural', '-6Hz'], en: ['en-GB-RyanNeural', '-4Hz'] };
 
 function prompt(market, fng, now) {
@@ -29,7 +30,7 @@ Return ONLY this JSON, nothing else:
 }
 
 async function gemini(key, text) {
-  let last = '';
+  const errs = [];
   for (const model of MODELS) {
     try {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
@@ -37,15 +38,15 @@ async function gemini(key, text) {
         body: JSON.stringify({ contents: [{ parts: [{ text }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 0.3 } })
       });
       const j = await r.json();
-      if (!r.ok) { last = `${model}: ${r.status} ${j.error?.message || ''}`.slice(0, 200); continue; }
+      if (!r.ok) { errs.push(`${model}: ${r.status} ${j.error?.message || ''}`.slice(0, 160)); continue; }
       const c = j.candidates?.[0], out = (c?.content?.parts || []).map(p => p.text || '').join('');
       const s = out.indexOf('{'), e = out.lastIndexOf('}');
       const brief = JSON.parse(out.slice(s, e + 1));
       const src = (c.groundingMetadata?.groundingChunks || []).map(g => g.web).filter(Boolean).slice(0, 6).map(w => ({ t: w.title, u: w.uri }));
       return { brief, src, model };
-    } catch (e) { last = `${model}: ${e.message}`.slice(0, 200); }
+    } catch (e) { errs.push(`${model}: ${e.message}`.slice(0, 160)); }
   }
-  throw new Error(last || 'gemini failed');
+  throw new Error(errs.join(' | ') || 'gemini failed');
 }
 
 // Ubuntu blocks system-wide pip installs, so edge-tts goes into its own small virtual env

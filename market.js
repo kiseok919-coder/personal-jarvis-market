@@ -97,7 +97,7 @@ function lastSlot(now) {
     console.log(`news ok: ${news.model}, voice ko ${news.voice.ko} en ${news.voice.en}`);
   } catch (e) {
     // Record the failure so the app can say so, and so a request does not retry every 10 minutes
-    await patch(DOC, { newsErr: JSON.stringify({ at: new Date().toISOString(), error: e.message.slice(0, 200) }) });
+    await patch(DOC, { newsErr: JSON.stringify({ at: new Date().toISOString(), error: e.message.slice(0, 600) }) });
     console.log('news failed: ' + e.message);
   }
 })().catch(e => { console.error(e.message); process.exit(1); });
