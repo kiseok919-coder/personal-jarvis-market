@@ -86,15 +86,15 @@ function analyze({ o, h, l, c }) {
 
   const r = rsi[n - 1], fresh = sigs.filter(g => g.i >= n - 2 && g.result === '진행 중').pop();
   let st;
-  if (fresh?.side === 'long') st = { code: 'buy', text: '🔵 4단계 완성 — 영상 기준 매수 자리', detail: '두 번째 바닥이 밴드 안에서 버티고 상승 장악형이 나왔습니다. 영상대로라면 손절을 먼저 걸고 들어가는 자리입니다.' };
-  else if (fresh?.side === 'short') st = { code: 'no', text: '⛔ 사면 안 됨 — 과열이 꺾이는 신호', detail: '쌍봉 뒤 하락 장악형이 나왔습니다(영상에선 숏 자리). 사는 쪽에겐 가장 나쁜 자리입니다.' };
-  else if (stL.ph === 2) st = { code: 'wait', text: '🟡 3단계 — 첫 반등 나옴, 두 번째 바닥 기다리는 중', detail: '한 번 더 눌릴 때 밴드 안에서 버티는지, 그다음 상승 장악형이 나오는지 봅니다. 아직 사지 않습니다.' };
-  else if (stL.ph === 1) st = { code: 'wait', text: '🟡 1~2단계 — 너무 팔리고 밴드 밖까지 밀림', detail: '노란 캔들 = 지켜보기 시작. 상승 장악형이 나오기 전엔 사면 안 됩니다(더 빠질 수 있음).' };
-  else if (stS.ph) st = { code: 'no', text: '⛔ 추격 금지 — 과열된 뒤 꺾일 준비', detail: 'RSI 70 위 + 밴드 위로 튄 뒤입니다. 이런 데서 사면 물리기 쉽습니다.' };
-  else if (r != null && r >= 70) st = { code: 'no', text: '⛔ 추격 금지 — 너무 오름(RSI 70+)', detail: '과열 구간입니다. RSI가 높다고 바로 빠지진 않지만, 새로 사기엔 가장 비싼 자리입니다.' };
-  else if (r != null && r <= 30) st = { code: 'low', text: '🟠 많이 빠졌지만 아직 아님', detail: 'RSI는 30 아래인데 밴드 밖으로 마감한 캔들이 없습니다. 영상 기준 1단계도 아닙니다.' };
-  else if (r != null && r >= 40 && r <= 60) st = { code: 'no', text: '⛔ 절대 아님 — RSI 50 근처, 이도 저도 아닌 구간', detail: '영상에서 "건드리지 말라"고 한 가운데 구간입니다.' };
-  else st = { code: 'none', text: '⚪ 신호 없음 — 기다리기', detail: '어느 쪽으로도 끝까지 쏠리지 않았습니다.' };
+  if (fresh?.side === 'long') st = { key: 'buy', code: 'buy', text: '🔵 4단계 완성 — 영상 기준 매수 자리', detail: '두 번째 바닥이 밴드 안에서 버티고 상승 장악형이 나왔습니다. 영상대로라면 손절을 먼저 걸고 들어가는 자리입니다.' };
+  else if (fresh?.side === 'short') st = { key: 'stop', code: 'no', text: '⛔ 사면 안 됨 — 과열이 꺾이는 신호', detail: '쌍봉 뒤 하락 장악형이 나왔습니다(영상에선 숏 자리). 사는 쪽에겐 가장 나쁜 자리입니다.' };
+  else if (stL.ph === 2) st = { key: 'near', code: 'wait', text: '🟡 3단계 — 첫 반등 나옴, 두 번째 바닥 기다리는 중', detail: '한 번 더 눌릴 때 밴드 안에서 버티는지, 그다음 상승 장악형이 나오는지 봅니다. 아직 사지 않습니다.' };
+  else if (stL.ph === 1) st = { key: 'watch', code: 'wait', text: '🟡 1~2단계 — 너무 팔리고 밴드 밖까지 밀림', detail: '노란 캔들 = 지켜보기 시작. 상승 장악형이 나오기 전엔 사면 안 됩니다(더 빠질 수 있음).' };
+  else if (stS.ph && r != null && r >= 50) st = { key: 'stop', code: 'no', text: '⛔ 추격 금지 — 과열된 뒤 꺾일 준비', detail: 'RSI 70 위 + 밴드 위로 튄 뒤입니다. 이런 데서 사면 물리기 쉽습니다.' };
+  else if (r != null && r >= 70) st = { key: 'stop', code: 'no', text: '⛔ 추격 금지 — 너무 오름(RSI 70+)', detail: '과열 구간입니다. RSI가 높다고 바로 빠지진 않지만, 새로 사기엔 가장 비싼 자리입니다.' };
+  else if (r != null && r <= 30) st = { key: 'early', code: 'low', text: '🟠 많이 빠졌지만 아직 아님', detail: 'RSI는 30 아래인데 밴드 밖으로 마감한 캔들이 없습니다. 영상 기준 1단계도 아닙니다.' };
+  else if (r != null && r >= 40 && r <= 60) st = { key: 'hands', code: 'no', text: '⛔ 절대 아님 — RSI 50 근처, 이도 저도 아닌 구간', detail: '영상에서 "건드리지 말라"고 한 가운데 구간입니다.' };
+  else st = { key: 'idle', code: 'none', text: '⚪ 신호 없음 — 기다리기', detail: '어느 쪽으로도 끝까지 쏠리지 않았습니다.' };
   st.rsi = r == null ? null : Math.round(r);
 
   return { rsi, up, mid, lo, mark, sigs, st };
