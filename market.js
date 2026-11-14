@@ -5,6 +5,7 @@
 // News briefing (news.js) is made at 07:00 and 23:00 KST, or when the app leaves a request ("req").
 
 const { makeNews } = require('./news.js');
+const { pack } = require('./signal.js');
 const KEY = process.env.BOT_KEY;
 if (!KEY) throw new Error('BOT_KEY secret is missing');
 const DOC = `https://firestore.googleapis.com/v1/projects/sales-board-4904c/databases/(default)/documents/econ_bot/${KEY}`;
@@ -22,6 +23,26 @@ function rsi(c, n = 14) {
   return l === 0 ? 100 : Math.round(100 - 100 / (1 + g / l));
 }
 
+// Study signal (signal.js): OHLC candles -> RSI double-bottom state. Daily reuses the quote fetch; hourly is one more call.
+function ohlc(res) {
+  const q = res.indicators.quote[0], t = res.timestamp || [];
+  const k = t.map((_, i) => i).filter(i => [q.open[i], q.high[i], q.low[i], q.close[i]].every(v => v != null));
+  return k.length < 40 ? null : [k.map(i => t[i]), ...['open', 'high', 'low', 'close'].map(f => k.map(i => q[f][i]))];
+}
+async function study(sym, daily) {
+  const out = {};
+  try { const d = ohlc(daily); if (d) out.d = pack(...d); } catch {}
+  for (const host of ['query1', 'query2']) {
+    try {
+      const r = await fetch(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1mo&interval=60m`, { headers: { 'User-Agent': UA } });
+      const res = (await r.json()).chart.result?.[0]; if (!res) continue;
+      const h = ohlc(res); if (h) out.h = pack(...h);
+      break;
+    } catch {}
+  }
+  return out.d || out.h ? out : null;
+}
+
 async function quote(sym, name) {
   for (const host of ['query1', 'query2']) {
     try {
@@ -34,7 +55,7 @@ async function quote(sym, name) {
       return {
         sym, name: name || res.meta.shortName || sym, cur: res.meta.currency, price: last,
         chg: prev ? (last / prev - 1) * 100 : 0, rsi: rsi(c), day: new Date(pts[pts.length - 1][0]).toISOString().slice(0, 10),
-        spark: c.slice(-30).map(v => +v.toFixed(2))
+        spark: c.slice(-30).map(v => +v.toFixed(2)), _d: res
       };
     } catch {}
   }
@@ -80,9 +101,16 @@ function lastSlot(now) {
     const got = await Promise.all(syms.slice(i, i + 6).map(x => quote(x.s, x.n)));
     market.push(...got.filter(Boolean));
   }
+  const sig = {};
+  for (let i = 0; i < market.length; i += 6) {
+    const got = await Promise.all(market.slice(i, i + 6).map(m => study(m.sym, m._d)));
+    got.forEach((g, j) => { if (g) sig[market[i + j].sym] = g; });
+  }
+  market.forEach(m => delete m._d);
   const live = { at: new Date().toISOString(), market, fng: await fng() };
-  await patch(DOC, { live: JSON.stringify(live) });
-  console.log(`ok: ${market.length}/${syms.length} quotes, F&G stock ${live.fng.stock?.score ?? '-'} crypto ${live.fng.crypto?.score ?? '-'}`);
+  const sigS = JSON.stringify({ at: live.at, s: sig });
+  await patch(DOC, sigS.length <= 300000 ? { live: JSON.stringify(live), sig: sigS } : { live: JSON.stringify(live) });
+  console.log(`ok: ${market.length}/${syms.length} quotes, study ${Object.keys(sig).length} (${sigS.length} chars), F&G stock ${live.fng.stock?.score ?? '-'} crypto ${live.fng.crypto?.score ?? '-'}`);
 
   // News briefing: on request from the app, or once per 07:00 / 23:00 slot
   const newsAt = [f.news, f.newsErr].filter(Boolean).map(x => JSON.parse(x.stringValue).at || '').sort().pop() || '';
