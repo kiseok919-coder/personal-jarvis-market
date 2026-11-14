@@ -6,6 +6,7 @@
 
 const { makeNews } = require('./news.js');
 const { pack } = require('./signal.js');
+const { upbit } = require('./upbit.js');
 const KEY = process.env.BOT_KEY;
 if (!KEY) throw new Error('BOT_KEY secret is missing');
 const DOC = `https://firestore.googleapis.com/v1/projects/sales-board-4904c/databases/(default)/documents/econ_bot/${KEY}`;
@@ -29,6 +30,12 @@ function ohlc(res) {
   const k = t.map((_, i) => i).filter(i => [q.open[i], q.high[i], q.low[i], q.close[i]].every(v => v != null));
   return k.length < 40 ? null : [k.map(i => t[i]), ...['open', 'high', 'low', 'close'].map(f => k.map(i => q[f][i]))];
 }
+function upStudy(o) {
+  const out = {};
+  try { out.d = pack(...o.d); } catch {}
+  try { if (o.h) out.h = pack(...o.h); } catch {}
+  return out.d || out.h ? out : null;
+}
 async function study(sym, daily) {
   const out = {};
   try { const d = ohlc(daily); if (d) out.d = pack(...d); } catch {}
@@ -41,6 +48,13 @@ async function study(sym, daily) {
     } catch {}
   }
   return out.d || out.h ? out : null;
+}
+
+// Coins (BTC-USD ...) come from Upbit in won when listed there; everything else (and unlisted coins) from Yahoo.
+async function price(x) {
+  const u = await upbit(x.s);
+  if (u) { const { hist, ...q } = u; return { ...q, name: x.n || x.s }; }
+  return quote(x.s, x.n);
 }
 
 async function quote(sym, name) {
@@ -98,15 +112,15 @@ function lastSlot(now) {
   const syms = JSON.parse(f.syms.stringValue);   // [{ s, n }]
   const market = [];
   for (let i = 0; i < syms.length; i += 6) {
-    const got = await Promise.all(syms.slice(i, i + 6).map(x => quote(x.s, x.n)));
+    const got = await Promise.all(syms.slice(i, i + 6).map(x => price(x)));
     market.push(...got.filter(Boolean));
   }
   const sig = {};
   for (let i = 0; i < market.length; i += 6) {
-    const got = await Promise.all(market.slice(i, i + 6).map(m => study(m.sym, m._d)));
+    const got = await Promise.all(market.slice(i, i + 6).map(m => m.ohlc ? upStudy(m.ohlc) : study(m.sym, m._d)));
     got.forEach((g, j) => { if (g) sig[market[i + j].sym] = g; });
   }
-  market.forEach(m => delete m._d);
+  market.forEach(m => { delete m._d; delete m.ohlc; });
   const live = { at: new Date().toISOString(), market, fng: await fng() };
   const sigS = JSON.stringify({ at: live.at, s: sig });
   await patch(DOC, sigS.length <= 300000 ? { live: JSON.stringify(live), sig: sigS } : { live: JSON.stringify(live) });
