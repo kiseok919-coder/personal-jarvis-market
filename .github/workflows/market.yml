@@ -4,7 +4,8 @@ on:
     # Odd minutes on purpose: GitHub delays or drops runs scheduled on busy round minutes (:00, :10 ...).
     - cron: '3-59/10 0-6 * * 1-5'    # Korea market 09:00-15:59 KST, weekdays
     - cron: '3-59/10 13-21 * * 1-5'  # US market 22:00-06:59 KST (covers summer and winter time)
-    - cron: '17,47 * * * *'          # everything else: crypto and Fear & Greed every 30 minutes
+    - cron: '7-59/10 7-12,22-23 * * *'  # everything else: crypto (15-minute study candles) and Fear & Greed every 10 minutes
+    - cron: '7-59/10 0-6,13-21 * * 0,6'  # weekends: the hours the two weekday lines skip
   workflow_dispatch:
     inputs:
       news:

@@ -31,7 +31,7 @@ function rsi(c, n = 14) {
   return l === 0 ? 100 : Math.round(100 - 100 / (1 + g / l));
 }
 
-async function upbit(sym, { hourlyPages = 4 } = {}) {
+async function upbit(sym, { hourlyPages = 4, minPages = 3 } = {}) {
   const m = /^([A-Z0-9]+)-USD$/.exec(sym);
   if (!m) return null;
   const mk = 'KRW-' + m[1];
@@ -48,12 +48,21 @@ async function upbit(sym, { hourlyPages = 4 } = {}) {
       hr = [...got.reverse(), ...hr];
       if (got.length < 200) break;
     }
+    // 15-minute candles for coins (3 pages = 600 bars, about 6 days)
+    let mn = [];
+    for (let p = 0; p < minPages; p++) {
+      const to = mn.length ? `&to=${encodeURIComponent(mn[0].candle_date_time_utc + 'Z')}` : '';
+      const got = await get(`candles/minutes/15?market=${mk}&count=200${to}`);
+      if (!Array.isArray(got) || !got.length) break;
+      mn = [...got.reverse(), ...mn];
+      if (got.length < 200) break;
+    }
     const c = day.map(d => d.trade_price), last = c[c.length - 1], prev = c[c.length - 2];
     return {
       sym, cur: 'KRW', price: last, chg: prev ? (last / prev - 1) * 100 : 0, rsi: rsi(c),
       day: day[day.length - 1].candle_date_time_kst.slice(0, 10), spark: c.slice(-30), src: 'upbit',
       hist: day.map(d => [sec(d) * 1000, d.trade_price]),
-      ohlc: { d: cols(day), h: hr.length >= 40 ? cols(hr) : null }
+      ohlc: { d: cols(day), h: hr.length >= 40 ? cols(hr) : null, m: mn.length >= 40 ? cols(mn) : null }
     };
   } catch { return null; }
 }

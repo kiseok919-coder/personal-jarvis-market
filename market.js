@@ -34,6 +34,7 @@ function upStudy(o) {
   const out = {};
   try { out.d = pack(...o.d); } catch {}
   try { if (o.h) out.h = pack(...o.h); } catch {}
+  try { if (o.m) out.m = pack(...o.m); } catch {}
   return out.d || out.h ? out : null;
 }
 async function study(sym, daily) {
