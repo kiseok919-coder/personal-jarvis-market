@@ -30,21 +30,24 @@ function ohlc(res) {
   const k = t.map((_, i) => i).filter(i => [q.open[i], q.high[i], q.low[i], q.close[i]].every(v => v != null));
   return k.length < 40 ? null : [k.map(i => t[i]), ...['open', 'high', 'low', 'close'].map(f => k.map(i => q[f][i]))];
 }
+// Last argument = seconds until a candle closes, so a signal on a still-open candle shows as "forming".
+// Yahoo daily candles are stamped at the open and the regular session is 6.5 h (Korea and US alike) -> +15 min margin.
+const SPAN = { up: { d: 86400, h: 3600, m: 900 }, yd: 6.5 * 3600 + 900, yh: 3600 };
 function upStudy(o) {
   const out = {};
-  try { out.d = pack(...o.d); } catch {}
-  try { if (o.h) out.h = pack(...o.h); } catch {}
-  try { if (o.m) out.m = pack(...o.m); } catch {}
+  try { out.d = pack(...o.d, 50, SPAN.up.d); } catch {}
+  try { if (o.h) out.h = pack(...o.h, 50, SPAN.up.h); } catch {}
+  try { if (o.m) out.m = pack(...o.m, 50, SPAN.up.m); } catch {}
   return out.d || out.h ? out : null;
 }
 async function study(sym, daily) {
   const out = {};
-  try { const d = ohlc(daily); if (d) out.d = pack(...d); } catch {}
+  try { const d = ohlc(daily); if (d) out.d = pack(...d, 50, SPAN.yd); } catch {}
   for (const host of ['query1', 'query2']) {
     try {
       const r = await fetch(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1mo&interval=60m`, { headers: { 'User-Agent': UA } });
       const res = (await r.json()).chart.result?.[0]; if (!res) continue;
-      const h = ohlc(res); if (h) out.h = pack(...h);
+      const h = ohlc(res); if (h) out.h = pack(...h, 50, SPAN.yh);
       break;
     } catch {}
   }
@@ -123,8 +126,17 @@ function lastSlot(now) {
   }
   market.forEach(m => { delete m._d; delete m.ohlc; });
   const live = { at: new Date().toISOString(), market, fng: await fng() };
-  const sigS = JSON.stringify({ at: live.at, s: sig });
+  // Firestore rule caps sig at 300000 chars. If the watch list grows past that, trim instead of skipping:
+  // first keep fewer candles (50 -> 35), then drop the 15-minute view, then the daily view. Never write a stale sig silently.
+  const fit = keep => { const s = {}; for (const k in sig) { s[k] = {}; for (const tf in sig[k]) { const x = sig[k][tf]; const cut = x.bars.length - keep; s[k][tf] = cut > 0 ? { ...x, bars: x.bars.slice(cut), sigs: x.sigs.map(g => ({ ...g, k: g.k - cut, end: g.end == null ? null : g.end - cut })).filter(g => g.k >= 0) } : x; } } return s; };
+  const drop = (s, tf) => { for (const k in s) if (s[k].h || s[k].d) delete s[k][tf]; return s; };
+  let sigS = JSON.stringify({ at: live.at, s: sig }), trim = '';
+  for (const [name, mk] of [['35 bars', () => fit(35)], ['no 15m', () => drop(fit(35), 'm')], ['no daily', () => drop(drop(fit(35), 'm'), 'd')]]) {
+    if (sigS.length <= 300000) break;
+    sigS = JSON.stringify({ at: live.at, s: mk(), trim: name }); trim = name;
+  }
   await patch(DOC, sigS.length <= 300000 ? { live: JSON.stringify(live), sig: sigS } : { live: JSON.stringify(live) });
+  if (trim) console.log('sig trimmed: ' + trim);
   console.log(`ok: ${market.length}/${syms.length} quotes, study ${Object.keys(sig).length} (${sigS.length} chars), F&G stock ${live.fng.stock?.score ?? '-'} crypto ${live.fng.crypto?.score ?? '-'}`);
 
   // News briefing: on request from the app, or once per 07:00 / 23:00 slot

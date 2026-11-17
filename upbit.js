@@ -40,23 +40,24 @@ async function upbit(sym, { hourlyPages = 4, minPages = 3 } = {}) {
     if (!Array.isArray(day) || day.length < 20) return null;
     day.reverse();
     // Hourly: 200 per call, newest first. Page back with "to" for about a month.
+    // Hourly and 15-minute pages each fail on their own: a bad page drops that view only, not the won price.
     let hr = [];
-    for (let p = 0; p < hourlyPages; p++) {
+    try { for (let p = 0; p < hourlyPages; p++) {
       const to = hr.length ? `&to=${encodeURIComponent(hr[0].candle_date_time_utc + 'Z')}` : '';
       const got = await get(`candles/minutes/60?market=${mk}&count=200${to}`);
       if (!Array.isArray(got) || !got.length) break;
       hr = [...got.reverse(), ...hr];
       if (got.length < 200) break;
-    }
+    } } catch {}  // keep the pages already fetched
     // 15-minute candles for coins (3 pages = 600 bars, about 6 days)
     let mn = [];
-    for (let p = 0; p < minPages; p++) {
+    try { for (let p = 0; p < minPages; p++) {
       const to = mn.length ? `&to=${encodeURIComponent(mn[0].candle_date_time_utc + 'Z')}` : '';
       const got = await get(`candles/minutes/15?market=${mk}&count=200${to}`);
       if (!Array.isArray(got) || !got.length) break;
       mn = [...got.reverse(), ...mn];
       if (got.length < 200) break;
-    }
+    } } catch {}
     const c = day.map(d => d.trade_price), last = c[c.length - 1], prev = c[c.length - 2];
     return {
       sym, cur: 'KRW', price: last, chg: prev ? (last / prev - 1) * 100 : 0, rsi: rsi(c),

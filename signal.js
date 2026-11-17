@@ -33,7 +33,9 @@ function bands(c, n = 20, k = 2) {
   return { up, mid, lo };
 }
 
-function analyze({ o, h, l, c }) {
+// forming = the last candle is still open (live). A signal on that candle can vanish before it closes,
+// so it is reported as 'forming' instead of 'buy' (the video's rule is: act after the candle closes).
+function analyze({ o, h, l, c }, forming = false) {
   const n = c.length, rsi = rsiSeries(c), { up, mid, lo } = bands(c);
   const red = i => c[i] < o[i], green = i => c[i] > o[i];
   const bullEng = i => i > 0 && green(i) && red(i - 1) && c[i] >= o[i - 1] && o[i] <= c[i - 1];
@@ -49,7 +51,7 @@ function analyze({ o, h, l, c }) {
     const setup = L ? setupL : setupS, eng = L ? bullEng : bearEng, pull = L ? red : green;
     let ph = 0, s = -1, e1 = -1, ext = null, extI = -1, pulled = false;
     for (let i = 20; i < n; i++) {
-      if (setup(i)) { ph = 1; s = i; mark[i] = mark[i] || 'y'; continue; }
+      if (setup(i)) { ph = 1; s = i; mark[i] = mark[i] || (L ? 'y' : 'q'); continue; }
       if (ph && i - s > 48) ph = 0;                       // too old, forget it
       if (ph === 1) { if (eng(i)) { ph = 2; e1 = i; ext = null; extI = -1; pulled = false; } continue; }
       if (ph === 2) {
@@ -86,7 +88,8 @@ function analyze({ o, h, l, c }) {
 
   const r = rsi[n - 1], fresh = sigs.filter(g => g.i >= n - 2 && g.result === '진행 중').pop();
   let st;
-  if (fresh?.side === 'long') st = { key: 'buy', code: 'buy', text: '🔵 4단계 완성 — 영상 기준 매수 자리', detail: '두 번째 바닥이 밴드 안에서 버티고 상승 장악형이 나왔습니다. 영상대로라면 손절을 먼저 걸고 들어가는 자리입니다.' };
+  if (fresh?.side === 'long' && forming && fresh.i === n - 1) st = { key: 'forming', code: 'wait', text: '⏳ 4단계 형성 중 — 캔들이 끝나야 확정', detail: '지금 진행 중인 캔들에 상승 장악형이 잠깐 만들어졌습니다. 캔들이 끝날 때까지 모양이 유지돼야 매수 자리로 확정됩니다(영상 규칙: 마감 뒤 판단).' };
+  else if (fresh?.side === 'long') st = { key: 'buy', code: 'buy', text: '🔵 4단계 완성 — 영상 기준 매수 자리', detail: '두 번째 바닥이 밴드 안에서 버티고 상승 장악형이 나왔습니다. 영상대로라면 손절을 먼저 걸고 들어가는 자리입니다.' };
   else if (fresh?.side === 'short') st = { key: 'stop', code: 'no', text: '⛔ 사면 안 됨 — 과열이 꺾이는 신호', detail: '쌍봉 뒤 하락 장악형이 나왔습니다(영상에선 숏 자리). 사는 쪽에겐 가장 나쁜 자리입니다.' };
   else if (stL.ph === 2) st = { key: 'near', code: 'wait', text: '🟡 3단계 — 첫 반등 나옴, 두 번째 바닥 기다리는 중', detail: '한 번 더 눌릴 때 밴드 안에서 버티는지, 그다음 상승 장악형이 나오는지 봅니다. 아직 사지 않습니다.' };
   else if (stL.ph === 1) st = { key: 'watch', code: 'wait', text: '🟡 1~2단계 — 너무 팔리고 밴드 밖까지 밀림', detail: '노란 캔들 = 지켜보기 시작. 상승 장악형이 나오기 전엔 사면 안 됩니다(더 빠질 수 있음).' };
@@ -102,13 +105,16 @@ function analyze({ o, h, l, c }) {
 
 // Compact form for the app: last `keep` bars + signals that touch them.
 const P = v => v == null ? null : +(+v).toPrecision(6);
-function pack(t, o, h, l, c, keep = 50) {
-  const a = analyze({ o, h, l, c }), n = c.length, from = Math.max(0, n - keep);
+// span = seconds one candle lasts until it closes (e.g. 900 for 15 min). Used to tell whether the last candle is still open.
+function pack(t, o, h, l, c, keep = 50, span = 0) {
+  const forming = span > 0 && t[t.length - 1] + span > Date.now() / 1000;
+  const a = analyze({ o, h, l, c }, forming), n = c.length, from = Math.max(0, n - keep);
   const bars = [];
   for (let i = from; i < n; i++) bars.push([t[i], P(o[i]), P(h[i]), P(l[i]), P(c[i]), P(a.up[i]), P(a.lo[i]), a.rsi[i] == null ? null : Math.round(a.rsi[i]), a.mark[i]]);
   const sigs = a.sigs.map(g => ({ k: g.i - from, side: g.side, entry: P(g.entry), stop: P(g.stop), target: P(g.target), result: g.result, end: g.end == null ? null : g.end - from, t: t[g.i] }));
-  const done = sigs.filter(g => g.result !== '진행 중'), win = done.filter(g => g.result === '목표 도달').length;
-  return { bars, sigs: sigs.slice(-6), st: a.st, score: { n: done.length, win } };
+  const done = sigs.filter(g => g.side === 'long' && g.result !== '진행 중'),  // score = buy signals only (the app says '매수 신호 성적')
+    win = done.filter(g => g.result === '목표 도달').length;
+  return { bars, sigs: sigs.slice(-6), st: a.st, score: { n: done.length, win }, ...(forming ? { live: 1 } : {}) };
 }
 
 module.exports = { analyze, pack, rsiSeries, bands };
